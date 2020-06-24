@@ -23,7 +23,7 @@
   - [aedes.subscribe (topic, deliverfunc, callback)](#aedessubscribe-topic-deliverfunc-callback)
   - [aedes.unsubscribe (topic, deliverfunc, callback)](#aedesunsubscribe-topic-deliverfunc-callback)
   - [aedes.publish (packet, callback)](#aedespublish-packet-callback)
-  - [aedes.close (callback)](#aedesclose-callback)
+  - [aedes.close ([callback])](#aedesclose-callback)
   - [Handler: decodeProtocol (client, buffer)](#handler-decodeprotocol-client-buffer)
   - [Handler: preConnect (client, callback)](#handler-preconnect-client-callback)
   - [Handler: authenticate (client, username, password, callback)](#handler-authenticate-client-username-password-callback)
@@ -35,11 +35,13 @@
 ## new Aedes([options]) / new Aedes.Server([options])
 
 - options `<object>`
-  - `mq` [`<MQEmitter>`](../README.md#mqemitter) a middleware helps to deliver messages to subscribed clients. __Default__: `mqemitter`
+  - `mq` [`<MQEmitter>`](../README.md#mqemitter) middleware used to deliver messages to subscribed clients. In a cluster environment it is used also to share messages between brokers instances. __Default__: `mqemitter`
   - `concurrency` `<number>` maximum number of concurrent messages delivered by `mq`. __Default__: `100`
-  - `persistence` [`<Persistence>`](../README.md#persistence) a middleware stores _QoS > 0, retained, will_ packets and subscriptions. __Default__: `aedes-persistence`
+  - `persistence` [`<Persistence>`](../README.md#persistence) middleware that stores _QoS > 0, retained, will_ packets and _subscriptions_. __Default__: `aedes-persistence` (_in memory_)
   - `queueLimit` `<number>` maximum number of queued messages before client session is established. If number of queued items exceeds, `connectionError` throws an error `Client queue limit reached`. __Default__: `42`
+  - `maxClientsIdLength` option to override MQTT 3.1.0 clients Id length limit. __Default__: `23`
   - `heartbeatInterval` `<number>` an interval in millisconds at which server beats its health signal in `$SYS/<aedes.id>/heartbeat` topic. __Default__: `60000`
+  - `id` `<string>` aedes broker unique identifier. __Default__: `uuidv4()`
   - `connectTimeout` `<number>` maximum waiting time in milliseconds waiting for a [`CONNECT`][CONNECT] packet. __Default__: `30000`
 - Returns `<Aedes>`
 
@@ -69,7 +71,7 @@ a read-only flag indicates if server is closed or not.
 
 - `client` [`<Client>`](./Client.md)
 
-Emitted when the `client` registers itself to server. The `client` in not ready yet. Its [`connecting`](./Client.md##clientconnecting) state equals to `true`.
+Emitted when the `client` registers itself to server. The `client` is not ready yet. Its [`connecting`](./Client.md##clientconnecting) state equals to `true`.
 
 Server publishes a SYS topic `$SYS/<aedes.id>/new/clients` to inform it registers the client into its registration pool. `client.id` is the payload.
 
@@ -137,7 +139,7 @@ Emitted when `client` sends a `PINGREQ`.
 
 Emitted when `client` successfully subscribe the `subscriptions` in server.
 
-`subscriptions` are an array of `{ topic: topic, qos: qos }`
+`subscriptions` is an array of `{ topic: topic, qos: qos }`. The array excludes duplicated topics and includes negated subscriptions where `qos` equals to `128`. See more on [authorizeSubscribe](#handler-authorizesubscribe-client-subscription-callback)
 
 ## Event: unsubscribe
 
@@ -312,7 +314,7 @@ Invoked when
 1. publish LWT to all online clients
 2. incoming client publish
 
-If invoked `callback` with no errors, server authorizes the packet otherwise emits `clientError` with `error`.
+If invoked `callback` with no errors, server authorizes the packet otherwise emits `clientError` with `error`. If an `error` occurs the client connection will be closed, but no error is returned to the client (MQTT-3.3.5-2)
 
 ```js
 aedes.authorizePublish = function (client, packet, callback) {
@@ -359,7 +361,7 @@ aedes.authorizeSubscribe = function (client, sub, callback) {
 }
 ```
 
-To negate a subscription, set the subscription to `null`:
+To negate a subscription, set the subscription to `null`. Aedes ignores the negated subscription and the `qos` in `SubAck` is set to `128` based on [MQTT 3.11 spec](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html#_Toc385349323):
 
 ```js
 aedes.authorizeSubscribe = function (client, sub, callback) {

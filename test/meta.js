@@ -153,6 +153,28 @@ test('emit subscribe event', function (t) {
   })
 })
 
+test('emit subscribe event if unrecognized params in subscribe packet structure', function (t) {
+  t.plan(3)
+
+  const broker = aedes()
+  t.tearDown(broker.close.bind(broker))
+
+  const s = noError(connect(setup(broker)))
+  const subs = [{ topic: 'hello', qos: 0 }]
+
+  broker.on('subscribe', function (subscriptions, client) {
+    t.equal(subscriptions, subs)
+    t.deepEqual(client, s.client)
+  })
+
+  s.client.subscribe({
+    subscriptions: subs,
+    restore: true
+  }, function (err) {
+    t.error(err)
+  })
+})
+
 test('emit unsubscribe event', function (t) {
   t.plan(6)
 
@@ -178,6 +200,28 @@ test('emit unsubscribe event', function (t) {
     s.outStream.once('data', function (packet) {
       t.pass('subscribe completed')
     })
+  })
+})
+
+test('emit unsubscribe event if unrecognized params in unsubscribe packet structure', function (t) {
+  t.plan(3)
+
+  const broker = aedes()
+  t.tearDown(broker.close.bind(broker))
+
+  const s = noError(connect(setup(broker)))
+  const unsubs = [{ topic: 'hello', qos: 0 }]
+
+  broker.on('unsubscribe', function (unsubscriptions, client) {
+    t.equal(unsubscriptions, unsubs)
+    t.deepEqual(client, s.client)
+  })
+
+  s.client.unsubscribe({
+    unsubscriptions: unsubs,
+    close: true
+  }, function (err) {
+    t.error(err)
   })
 })
 

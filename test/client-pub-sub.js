@@ -125,6 +125,41 @@ test('publish direct to a single client QoS 1', function (t) {
   })
 })
 
+test('publish QoS 2 throws error in pubrel', function (t) {
+  t.plan(2)
+
+  const broker = aedes()
+  t.tearDown(broker.close.bind(broker))
+
+  const s = connect(setup(broker))
+
+  broker.on('clientError', function (c, err) {
+    t.pass('throws error')
+  })
+
+  s.outStream.on('data', function (packet) {
+    if (packet.cmd === 'publish') {
+      s.inStream.write({
+        cmd: 'pubrec',
+        messageId: packet.messageId
+      })
+      s.broker.persistence.outgoingUpdate = function (client, pubrel, cb) {
+        cb(new Error('error'))
+      }
+    }
+  })
+
+  broker.on('clientReady', function (client) {
+    client.publish({
+      topic: 'hello',
+      payload: Buffer.from('world'),
+      qos: 2
+    }, function (err) {
+      t.error(err, 'no error')
+    })
+  })
+})
+
 test('publish direct to a single client QoS 2', function (t) {
   t.plan(3)
 
@@ -468,11 +503,96 @@ test('unsubscribe a client', function (t) {
       qos: 0
     }, function (err) {
       t.error(err, 'no error')
+      client.unsubscribe([{
+        topic: 'hello',
+        qos: 0
+      }], function (err) {
+        t.error(err, 'no error')
+      })
+    })
+  })
+  connect(setup(broker))
+})
+
+test('unsubscribe should not call removeSubscriptions when [clean=true]', function (t) {
+  t.plan(2)
+
+  const broker = aedes()
+  t.tearDown(broker.close.bind(broker))
+
+  broker.persistence.removeSubscriptions = function (client, subs, cb) {
+    cb(Error('remove subscription is called'))
+  }
+
+  broker.on('client', function (client) {
+    client.subscribe({
+      topic: 'hello',
+      qos: 1
+    }, function (err) {
+      t.error(err, 'no error')
+      client.unsubscribe({
+        unsubscriptions: [{
+          topic: 'hello',
+          qos: 1
+        }],
+        messageId: 42
+      }, function (err) {
+        t.error(err, 'no error')
+      })
+    })
+  })
+  connect(setup(broker), { clean: true })
+})
+
+test('unsubscribe throws error', function (t) {
+  t.plan(2)
+
+  const broker = aedes()
+  t.tearDown(broker.close.bind(broker))
+
+  broker.on('client', function (client) {
+    client.subscribe({
+      topic: 'hello',
+      qos: 0
+    }, function (err) {
+      t.error(err, 'no error')
+      broker.unsubscribe = function (topic, func, done) {
+        done(new Error('error'))
+      }
       client.unsubscribe({
         topic: 'hello',
         qos: 0
-      }, function (err) {
-        t.error(err, 'no error')
+      }, function () {
+        t.pass('throws error')
+      })
+    })
+  })
+  connect(setup(broker))
+})
+
+test('unsubscribe throws error 2', function (t) {
+  t.plan(2)
+
+  const broker = aedes()
+  t.tearDown(broker.close.bind(broker))
+
+  broker.on('client', function (client) {
+    client.subscribe({
+      topic: 'hello',
+      qos: 2
+    }, function (err) {
+      t.error(err, 'no error')
+      broker.persistence.removeSubscriptions = function (client, unsubscriptions, done) {
+        done(new Error('error'))
+      }
+      client.unsubscribe({
+        unsubscriptions: [{
+          topic: 'hello',
+          qos: 2
+        }],
+        messageId: 42
+      }, function () {
+        t.pass('throws error')
       })
     })
   })
@@ -624,7 +744,7 @@ test('get message when client disconnects', function (t) {
 })
 
 test('should not receive a message on negated subscription', function (t) {
-  t.plan(2)
+  t.plan(4)
 
   const broker = aedes()
   t.tearDown(broker.close.bind(broker))
@@ -641,13 +761,22 @@ test('should not receive a message on negated subscription', function (t) {
       retain: true
     }, function (err) {
       t.error(err, 'no error')
-      client.subscribe({
+      client.subscribe([{
         topic: 'hello',
         qos: 0
-      }, function (err) {
+      },
+      {
+        topic: 'hello',
+        qos: 0
+      }], function (err) {
         t.error(err, 'no error')
       })
     })
+  })
+
+  broker.on('subscribe', function (subs) {
+    t.pass(subs.length, 1, 'Should dedupe subs')
+    t.pass(subs[0].qos, 128, 'Qos should be 128 (Fail)')
   })
 
   const s = connect(setup(broker))

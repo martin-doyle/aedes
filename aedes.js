@@ -1,10 +1,10 @@
 'use strict'
 
-const EE = require('events').EventEmitter
+const EventEmitter = require('events')
 const util = require('util')
 const parallel = require('fastparallel')
 const series = require('fastseries')
-const uuidv4 = require('uuid/v4')
+const { v4: uuidv4 } = require('uuid')
 const bulk = require('bulk-write-stream')
 const reusify = require('reusify')
 const { pipeline } = require('readable-stream')
@@ -28,7 +28,8 @@ const defaultOptions = {
   published: defaultPublished,
   trustProxy: false,
   trustedProxies: [],
-  queueLimit: 42
+  queueLimit: 42,
+  maxClientsIdLength: 23
 }
 
 function Aedes (opts) {
@@ -41,10 +42,16 @@ function Aedes (opts) {
   opts = Object.assign({}, defaultOptions, opts)
 
   this.id = opts.id || uuidv4()
+  // +1 when construct a new aedes-packet
+  // internal track for last brokerCounter
   this.counter = 0
   this.queueLimit = opts.queueLimit
   this.connectTimeout = opts.connectTimeout
-  this.mq = opts.mq || mqemitter(opts)
+  this.maxClientsIdLength = opts.maxClientsIdLength
+  this.mq = opts.mq || mqemitter({
+    concurrency: opts.concurrency,
+    matchEmptyLevels: true // [MQTT-4.7.1-3]
+  })
   this.handle = function handle (conn, req) {
     conn.setMaxListeners(opts.concurrency * 2)
     // create a new Client instance for a new connection
@@ -152,7 +159,7 @@ function Aedes (opts) {
   this.closed = false
 }
 
-util.inherits(Aedes, EE)
+util.inherits(Aedes, EventEmitter)
 
 function storeRetained (packet, done) {
   if (packet.retain) {
@@ -195,6 +202,7 @@ function DoEnqueues () {
     if (err) {
       // is this really recoverable?
       // let's just error the whole aedes
+      // https://nodejs.org/api/events.html#events_error_events
       broker.emit('error', err)
       return
     }

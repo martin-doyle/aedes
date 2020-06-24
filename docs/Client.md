@@ -10,12 +10,14 @@
   - [client.closed](#clientclosed)
   - [client.id](#clientid)
   - [client.clean](#clientclean)
+  - [client.version](#clientversion)
   - [Event: connected](#event-connected)
   - [Event: error](#event-error)
   - [client.publish (packet, [callback])](#clientpublish-packet-callback)
   - [client.subscribe (subscriptions, [callback])](#clientsubscribe-subscriptions-callback)
   - [client.unsubscribe (unsubscriptions, [callback])](#clientunsubscribe-unsubscriptions-callback)
   - [client.close ([callback])](#clientclose-callback)
+  - [client.emptyOutgoingQueue ([callback])](#clientemptyoutgoingqueue-callback)
 
 ## new Client(aedes, stream, request)
 
@@ -62,13 +64,25 @@ a read-only flag indicates if client is closed or not.
 
 - `<string>` __Default__: `aedes_${shortid()}`
 
-Client unique identifier, specified by CONNECT packet. It is `null` in [`aedes.preConnect`](./Aedes.md#handler-preconnect-client-callback) unless the handler passes.
+Client unique identifier, specified by CONNECT packet.
+
+It is available only after `CONNACK (rc=0)`, otherwise it is `null` in cases:
+
+- in [`aedes.preConnect`](./Aedes.md#handler-preconnect-client-callback) stage
+- after `CONNACK (rc!=0)` response
+- `connectionError` raised by aedes
 
 ## client.clean
 
 - `<boolean>` __Default__: `true`
 
-Client clean flag, specified by CONNECT packet.
+Client clean flag, set by clean flag in `CONNECT` packet.
+
+## client.version
+
+- `<number>` __Default__: `null`
+
+Client version, set by protocol version in `CONNECT` packet when `CONNACK (rc=0)` returns.
 
 ## Event: connected
 
@@ -109,7 +123,8 @@ Subscribe client to the list of topics.
 ## client.unsubscribe (unsubscriptions, [callback])
 
 - `unsubscriptions` `<object>`
-- `callback` `<Function>`
+- `callback` `<Function>` `(error) => void`
+  - error `<Error>` | `null`
 
 Unsubscribe client to the list of topics.
 
@@ -126,6 +141,12 @@ Unsubscribe client to the list of topics.
 Disconnect client
 
 `callback` will be invoked when client is closed.
+
+## client.emptyOutgoingQueue ([callback])
+
+Clear all outgoing messages (QoS > 1) related to this client from persistence
+
+`callback` will be invoked when the operation ends.
 
 [PUBLISH]: https://github.com/mqttjs/mqtt-packet#publish
 [SUBSCRIBE]: https://github.com/mqttjs/mqtt-packet#subscribe

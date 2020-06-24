@@ -2,9 +2,9 @@
 
 const { test } = require('tap')
 const memory = require('aedes-persistence')
+const Faketimers = require('@sinonjs/fake-timers')
 const { setup, connect, noError } = require('./helper')
 const aedes = require('../')
-const Faketimers = require('@sinonjs/fake-timers')
 
 function willConnect (s, opts, connected) {
   opts = opts || {}
@@ -117,15 +117,15 @@ test('delivers old will in case of a crash', function (t) {
 test('delete old broker', function (t) {
   t.plan(1)
 
-  var clock = Faketimers.install()
+  const clock = Faketimers.install()
 
-  var heartbeatInterval = 100
+  const heartbeatInterval = 100
   const broker = aedes({
     heartbeatInterval: heartbeatInterval
   })
   t.tearDown(broker.close.bind(broker))
 
-  var brokerId = 'dummyBroker'
+  const brokerId = 'dummyBroker'
 
   broker.brokers[brokerId] = Date.now() - heartbeatInterval * 3.5
 
@@ -333,7 +333,7 @@ test('does not deliver will if broker is closed during authentication', function
     authenticate: function (client, username, password, callback) {
       setTimeout(function () {
         callback(null, true)
-      }, 3000)
+      })
       broker.close()
     }
   })
@@ -430,17 +430,24 @@ test('don\'t delivers a will if broker alive', function (t) {
     const broker = aedes(opts)
     t.tearDown(broker.close.bind(broker))
 
+    var streamWill = persistence.streamWill
+    persistence.streamWill = function () {
+      // don't pass broker.brokers to streamWill
+      return streamWill.call(persistence)
+    }
+
     broker.mq.on('mywill', function (packet, cb) {
       t.fail('Will received')
       cb()
     })
 
     broker.mq.on('$SYS/+/heartbeat', function () {
-      // update old broker heartbeat to simulate it is alive
-      broker.brokers[oldBroker] = Date.now()
       t.pass('Heartbeat received')
+      broker.brokers[oldBroker] = Date.now()
 
-      if (++count === 5) t.end()
+      if (++count === 5) {
+        t.end()
+      }
     })
   })
 })

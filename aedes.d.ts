@@ -58,6 +58,7 @@ declare namespace aedes {
 
   interface AedesOptions {
     mq?: any
+    id?: string
     persistence?: any
     concurrency?: number
     heartbeatInterval?: number
@@ -69,10 +70,12 @@ declare namespace aedes {
     authorizeForward?: AuthorizeForwardHandler
     published?: PublishedHandler
     queueLimit?: number
+    maxClientsIdLength?: number
   }
   interface Client extends EventEmitter {
     id: string
     clean: boolean
+    version: number
     conn: Connection
     req?: IncomingMessage
     connecting: boolean
@@ -89,6 +92,7 @@ declare namespace aedes {
     ): void
     unsubscribe (topicObjects: Subscriptions | Subscription | Subscription[] | UnsubscribePacket, callback?: (error?: Error) => void): void
     close (callback?: () => void): void
+    emptyOutgoingQueue (callback?: () => void): void
   }
 
   interface Aedes extends EventEmitter {

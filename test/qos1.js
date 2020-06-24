@@ -56,6 +56,30 @@ test('publish QoS 1 throws error', function (t) {
   })
 })
 
+test('publish QoS 1 throws error on write', function (t) {
+  t.plan(1)
+
+  const s = connect(setup())
+  t.tearDown(s.broker.close.bind(s.broker))
+
+  s.broker.on('client', function (client) {
+    client.connected = false
+    client.connecting = false
+
+    s.inStream.write({
+      cmd: 'publish',
+      topic: 'hello',
+      payload: 'world',
+      qos: 1,
+      messageId: 42
+    })
+  })
+
+  s.broker.on('clientError', function (client, err) {
+    t.equal(err.message, 'connection closed', 'throws error')
+  })
+})
+
 test('publish QoS 1 and check offline queue', function (t) {
   t.plan(13)
 
@@ -119,6 +143,72 @@ test('publish QoS 1 and check offline queue', function (t) {
               }
             })
           }
+        })
+      }
+    })
+    publisher.inStream.write(sent)
+    sent.payload = 'world2world'
+    publisher.inStream.write(sent)
+  })
+})
+
+test('publish QoS 1 and empty offline queue', function (t) {
+  t.plan(13)
+
+  const broker = aedes()
+  t.tearDown(broker.close.bind(broker))
+
+  const publisher = connect(setup(broker), { clean: false })
+  const subscriberClient = {
+    id: 'abcde'
+  }
+  const subscriber = connect(setup(broker), { clean: false, clientId: subscriberClient.id })
+  var expected = {
+    cmd: 'publish',
+    topic: 'hello',
+    qos: 1,
+    dup: false,
+    retain: false
+  }
+  const expectedAck = {
+    cmd: 'puback',
+    retain: false,
+    qos: 0,
+    dup: false,
+    length: 2,
+    messageId: 10
+  }
+  var sent = {
+    cmd: 'publish',
+    topic: 'hello',
+    payload: 'world',
+    qos: 1,
+    messageId: 10,
+    retain: false,
+    dup: false
+  }
+  var queue = []
+  subscribe(t, subscriber, 'hello', 1, function () {
+    publisher.outStream.on('data', function (packet) {
+      t.deepEqual(packet, expectedAck, 'ack packet must patch')
+    })
+    subscriber.outStream.on('data', function (packet) {
+      queue.push(packet)
+      delete packet.payload
+      delete packet.length
+      t.notEqual(packet.messageId, undefined, 'messageId is assigned a value')
+      t.notEqual(packet.messageId, 10, 'messageId should be unique')
+      expected.messageId = packet.messageId
+      t.deepEqual(packet, expected, 'publish packet must patch')
+      if (queue.length === 2) {
+        setImmediate(() => {
+          broker.clients[subscriberClient.id].emptyOutgoingQueue(function () {
+            for (var i = 0; i < queue.length; i++) {
+              broker.persistence.outgoingClearMessageId(subscriberClient, queue[i], function (_, origPacket) {
+                t.equal(!!origPacket, false, 'Packet has been removed')
+              })
+            }
+          })
         })
       }
     })
@@ -245,6 +335,64 @@ test('restore QoS 1 subscriptions not clean', function (t) {
       t.notEqual(packet.messageId, 42, 'messageId must differ')
       delete packet.messageId
       t.deepEqual(packet, expected, 'packet must match')
+    })
+  })
+})
+
+test('restore multiple QoS 1 subscriptions not clean w/ authorizeSubscribe', function (t) {
+  t.plan(11)
+
+  const broker = aedes()
+  t.tearDown(broker.close.bind(broker))
+
+  var subscriber = connect(setup(broker), { clean: false, clientId: 'abcde' })
+  const expected = {
+    cmd: 'publish',
+    topic: 'foo',
+    payload: Buffer.from('bar'),
+    qos: 1,
+    dup: false,
+    length: 10,
+    retain: false
+  }
+  const publisher = connect(setup(broker))
+
+  subscribe(t, subscriber, 'hello', 1, function () {
+    subscribe(t, subscriber, 'foo', 1, function () {
+      subscriber.inStream.end()
+      broker.authorizeSubscribe = function (client, sub, done) {
+        done(null, sub.topic === 'hello' ? 123 : sub)
+      }
+      subscriber = connect(setup(broker), { clean: false, clientId: 'abcde' }, function (connect) {
+        t.equal(connect.sessionPresent, true, 'session present is set to true')
+        publisher.inStream.write({
+          cmd: 'publish',
+          topic: 'hello',
+          payload: 'world',
+          qos: 1,
+          messageId: 42
+        })
+        publisher.inStream.write({
+          cmd: 'publish',
+          topic: 'foo',
+          payload: 'bar',
+          qos: 1,
+          messageId: 48
+        })
+      })
+      publisher.outStream.on('data', function (packet) {
+        t.equal(packet.cmd, 'puback')
+      })
+
+      subscriber.outStream.on('data', function (packet) {
+        subscriber.inStream.write({
+          cmd: 'puback',
+          messageId: packet.messageId
+        })
+        t.notEqual(packet.messageId, 48, 'messageId must differ')
+        delete packet.messageId
+        t.deepEqual(packet, expected, 'packet must match')
+      })
     })
   })
 })

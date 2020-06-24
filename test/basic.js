@@ -2,8 +2,9 @@
 
 const { test } = require('tap')
 const eos = require('end-of-stream')
-const { setup, connect, subscribe, noError } = require('./helper')
+const { setup, connect, subscribe, subscribeMultiple, noError } = require('./helper')
 const aedes = require('../')
+const proxyquire = require('proxyquire')
 
 test('test aedes.Server', function (t) {
   t.plan(1)
@@ -94,31 +95,99 @@ test('publish empty topic throws error', function (t) {
   })
 })
 
-test('subscribe QoS 0', function (t) {
-  t.plan(4)
+;[{ qos: 0, clean: false }, { qos: 0, clean: true }, { qos: 1, clean: false }, { qos: 1, clean: true }].forEach(function (ele) {
+  test('subscribe a single topic in QoS ' + ele.qos + ' [clean=' + ele.clean + ']', function (t) {
+    t.plan(5)
 
-  const s = connect(setup())
-  t.tearDown(s.broker.close.bind(s.broker))
+    const s = connect(setup(), { clean: ele.clean })
+    t.tearDown(s.broker.close.bind(s.broker))
 
-  const expected = {
-    cmd: 'publish',
-    topic: 'hello',
-    payload: Buffer.from('world'),
-    dup: false,
-    length: 12,
-    qos: 0,
-    retain: false
-  }
-
-  subscribe(t, s, 'hello', 0, function () {
-    s.outStream.once('data', function (packet) {
-      t.deepEqual(packet, expected, 'packet matches')
-    })
-
-    s.broker.publish({
+    const expected = {
       cmd: 'publish',
       topic: 'hello',
-      payload: 'world'
+      payload: Buffer.from('world'),
+      dup: false,
+      length: 12,
+      qos: 0,
+      retain: false
+    }
+    const expectedSubs = ele.clean ? null : [{ topic: 'hello', qos: ele.qos }]
+
+    subscribe(t, s, 'hello', ele.qos, function () {
+      s.outStream.once('data', function (packet) {
+        t.deepEqual(packet, expected, 'packet matches')
+      })
+
+      s.broker.persistence.subscriptionsByClient(s.client, function (_, subs) {
+        t.deepEqual(subs, expectedSubs)
+      })
+
+      s.broker.publish({
+        cmd: 'publish',
+        topic: 'hello',
+        payload: 'world'
+      })
+    })
+  })
+})
+
+// Catch invalid packet writeToStream errors
+test('return write errors to callback', function (t) {
+  t.plan(1)
+
+  const write = proxyquire('../lib/write.js', {
+    'mqtt-packet': {
+      writeToStream: () => {
+        throw Error('error')
+      }
+    }
+  })
+
+  var client = {
+    conn: {
+      writable: true
+    },
+    connecting: true
+  }
+
+  write(client, {}, function (err) {
+    t.equal(err.message, 'packet received not valid', 'should return the error to callback')
+  })
+})
+
+;[{ qos: 0, clean: false }, { qos: 0, clean: true }, { qos: 1, clean: false }, { qos: 1, clean: true }].forEach(function (ele) {
+  test('subscribe multipe topics in QoS ' + ele.qos + ' [clean=' + ele.clean + ']', function (t) {
+    t.plan(5)
+
+    const s = connect(setup(), { clean: ele.clean })
+    t.tearDown(s.broker.close.bind(s.broker))
+
+    const expected = {
+      cmd: 'publish',
+      topic: 'hello',
+      payload: Buffer.from('world'),
+      dup: false,
+      length: 12,
+      qos: 0,
+      retain: false
+    }
+    const subs = [{ topic: 'hello', qos: ele.qos }, { topic: 'world', qos: ele.qos }]
+    const expectedSubs = ele.clean ? null : subs
+
+    subscribeMultiple(t, s, subs, [ele.qos, ele.qos], function () {
+      s.outStream.on('data', function (packet) {
+        t.deepEqual(packet, expected, 'packet matches')
+      })
+
+      s.broker.persistence.subscriptionsByClient(s.client, function (_, saveSubs) {
+        t.deepEqual(saveSubs, expectedSubs)
+      })
+
+      s.broker.publish({
+        cmd: 'publish',
+        topic: 'hello',
+        payload: 'world'
+      })
     })
   })
 })
@@ -302,6 +371,22 @@ test('disconnect', function (t) {
 
   s.inStream.write({
     cmd: 'disconnect'
+  })
+})
+
+test('disconnect client on wrong cmd', function (t) {
+  t.plan(1)
+
+  const s = noError(connect(setup()), t)
+  t.tearDown(s.broker.close.bind(s.broker))
+
+  s.broker.on('clientDisconnect', function () {
+    t.pass('closed stream')
+  })
+
+  s.broker.on('clientReady', function (c) {
+    // don't use stream write here because it will throw an error on mqtt_packet genetete
+    c._parser.emit('packet', { cmd: 'pippo' })
   })
 })
 
