@@ -10,12 +10,12 @@ test('publishes an hearbeat', function (t) {
   const broker = aedes({
     heartbeatInterval: 10 // ms
   })
-  t.tearDown(broker.close.bind(broker))
+  t.teardown(broker.close.bind(broker))
 
   broker.subscribe('$SYS/+/heartbeat', function (message, cb) {
     const id = message.topic.match(/\$SYS\/([^/]+)\/heartbeat/)[1]
     t.equal(id, broker.id, 'broker id matches')
-    t.deepEqual(message.payload.toString(), id, 'message has id as the payload')
+    t.same(message.payload.toString(), id, 'message has id as the payload')
   })
 })
 
@@ -24,7 +24,7 @@ test('publishes an hearbeat', function (t) {
     t.plan(4)
 
     const s = connect(setup())
-    t.tearDown(s.broker.close.bind(s.broker))
+    t.teardown(s.broker.close.bind(s.broker))
 
     subscribe(t, s, '#', 0, function () {
       s.outStream.once('data', function (packet) {
@@ -45,7 +45,7 @@ test('publishes an hearbeat', function (t) {
     t.plan(4)
 
     const s = connect(setup())
-    t.tearDown(s.broker.close.bind(s.broker))
+    t.teardown(s.broker.close.bind(s.broker))
 
     subscribe(t, s, '+/#', 0, function () {
       s.outStream.once('data', function (packet) {
@@ -67,10 +67,10 @@ test('does not store $SYS topics to QoS 1 # subscription', function (t) {
   t.plan(3)
 
   const broker = aedes()
-  t.tearDown(broker.close.bind(broker))
+  t.teardown(broker.close.bind(broker))
 
   const opts = { clean: false, clientId: 'abcde' }
-  var s = connect(setup(broker), opts)
+  let s = connect(setup(broker), opts)
 
   subscribe(t, s, '#', 1, function () {
     s.inStream.end()
@@ -94,7 +94,7 @@ test('Emit event when receives a ping', { timeout: 2000 }, function (t) {
   t.plan(5)
 
   const broker = aedes()
-  t.tearDown(broker.close.bind(broker))
+  t.teardown(broker.close.bind(broker))
 
   broker.on('ping', function (packet, client) {
     if (client && client) {
@@ -140,8 +140,8 @@ test('Emit closed event one only when double broker.close()', function (t) {
 test('Test backpressure aedes published function', function (t) {
   t.plan(2)
 
-  var publishCount = 10
-  var count = 0
+  let publishCount = 10
+  let count = 0
 
   const broker = aedes({
     published: function (packet, client, done) {
@@ -157,7 +157,7 @@ test('Test backpressure aedes published function', function (t) {
 
   const mqtt = require('mqtt')
   const server = require('net').createServer(broker.handle)
-  var publisher
+  let publisher
 
   server.listen(0, function () {
     const port = server.address().port

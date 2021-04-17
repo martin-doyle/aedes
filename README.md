@@ -25,6 +25,7 @@ Barebone MQTT server that can run on any stream servers
   - [API](#api)
   - [Features](#features)
   - [Examples](#examples)
+  - [Clusters](#clusters)
   - [Exensions](#exensions)
   - [Middleware Plugins](#middleware-plugins)
     - [Persistence](#persistence)
@@ -40,6 +41,7 @@ Barebone MQTT server that can run on any stream servers
   - [Made with Aedes](#made-with-aedes)
   - [Collaborators](#collaborators)
   - [Contribution](#contribution)
+  - [Support](#support)
     - [Backers](#backers)
     - [Sponsors](#sponsors)
   - [License](#license)
@@ -79,11 +81,33 @@ Check Docker docs [here](https://github.com/moscajs/aedes-cli#docker)
 - [Dynamic Topics][dynamic_topics] Support
 - MQTT Bridge Support between aedes
 - [MQTT 5.0][mqttv5] _(not support yet)_
-- [Bridge Protocol][bridge_protocol] _(not support yet)_
+- [Bridge Protocol][bridge_protocol] _(incoming connections only)_
 
 ## Examples
 
 - [Examples](./docs/Examples.md)
+
+## Clusters
+
+Aedes needs on disk dbs like MongoDB and Redis in order to work with clusters. Based on our tests and users reports the best performances/stability are reached when using [aedes-persistence-mongodb] paired with [mqemitter-redis].
+
+Other info:
+
+- The repo [aedes-tests](https://github.com/moscajs/aedes-tests) is used to test aedes with clusters and different emitters/persistences. Check its source code to have a starting point on how to work with clusters
+
+## Bridge connections
+
+Normally, when publishing a message, the `retain` flag is consumed by Aedes and
+then set to `false`.  This is done for two reasons:
+
+- MQTT-3.3.1-9 states that it MUST set the RETAIN flag to 0 when a PUBLISH
+  Packet is sent to a Client because it matches an established subscription
+  regardless of how the flag was set in the message it received.
+- When operating as a cluster, only one Aedes node may store the packet
+
+Brokers that support the [Bridge Protocol][bridge_protocol] can connect to
+Aedes.  When connecting with this special protocol, subscriptions work as usual
+except that the `retain` flag in the packet is propagated as-is.
 
 ## Exensions
 
@@ -91,6 +115,7 @@ Check Docker docs [here](https://github.com/moscajs/aedes-cli#docker)
 - [aedes-stats]: Stats for Aedes
 - [aedes-cli]: Run Aedes MQTT Broker from the CLI
 - [aedes-protocol-decoder]: Protocol decoder for Aedes MQTT Broker
+- [aedes-server-factory]: Create a server instance such as TCP, HTTP, TLS...
 
 ## Middleware Plugins
 
@@ -248,6 +273,7 @@ Here is a list of some interesting projects that are using Aedes as MQTT Broker.
 - [__Behrad Zari__](https://github.com/behrad)
 - [__Gnought__](https://github.com/gnought)
 - [__Daniel Lando__](https://github.com/robertsLando)
+- [__Getlarge__](https://github.com/getlarge)
 
 ## Contribution
 
@@ -256,6 +282,10 @@ Here is a list of some interesting projects that are using Aedes as MQTT Broker.
 
 Want to contribute? Check our list of
 [features/bugs](https://github.com/moscajs/aedes/projects/1)
+
+## Support
+
+If there are bugs/leaks in production scenarios, we encourage people to send Pull Request and/or reach out maintainers for some paid support.
 
 ### Backers
 
@@ -283,6 +313,7 @@ Licensed under [MIT](./LICENSE).
 [aedes-stats]: https://www.npmjs.com/aedes-stats
 [aedes-cli]: https://www.npmjs.com/aedes-cli
 [aedes-protocol-decoder]: https://www.npmjs.com/aedes-protocol-decoder
+[aedes-server-factory]: https://www.npmjs.com/aedes-server-factory
 [aedes-persistence]: https://www.npmjs.com/aedes-persistence
 [aedes-persistence-mongodb]: https://www.npmjs.com/aedes-persistence-mongodb
 [aedes-persistence-redis]: https://www.npmjs.com/aedes-persistence-redis

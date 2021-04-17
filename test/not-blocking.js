@@ -1,50 +1,58 @@
 'use strict'
 
 const { test } = require('tap')
+const EventEmitter = require('events')
 const mqtt = require('mqtt')
 const net = require('net')
 const Faketimers = require('@sinonjs/fake-timers')
 const aedes = require('../')
 
-test('connect 200 concurrent clients', function (t) {
+test('connect 500 concurrent clients', function (t) {
   t.plan(3)
 
+  const evt = new EventEmitter()
   const broker = aedes()
   const server = net.createServer(broker.handle)
-  const total = 200
+  const total = 500
 
   server.listen(0, function (err) {
     t.error(err, 'no error')
 
     const clock = Faketimers.createClock()
-    t.tearDown(clock.reset.bind(clock))
+    t.teardown(clock.reset.bind(clock))
 
     const port = server.address().port
 
-    var connected = 0
-    var clients = []
+    let connected = 0
+    const clients = []
     clock.setTimeout(function () {
       t.equal(clients.length, total)
       t.equal(connected, total)
-      for (var i = 0; i < clients.length; i++) {
-        clients[i].end()
+      while (clients.length) {
+        clients.shift().end()
       }
-      broker.close()
-      server.close()
     }, total)
 
-    for (var i = 0; i < total; i++) {
+    evt.on('finish', function () {
+      if (clients.length === 0) {
+        broker.close()
+        server.close()
+      }
+    })
+
+    for (let i = 0; i < total; i++) {
       clients[i] = mqtt.connect({
         port: port,
-        keepalive: 0
+        keepalive: 0,
+        reconnectPeriod: 100
       }).on('connect', function () {
         connected++
         if ((connected % (total / 10)) === 0) {
           console.log('connected', connected)
         }
         clock.tick(1)
-      }).on('error', function () {
-        clock.tick(1)
+      }).on('close', function () {
+        evt.emit('finish')
       })
     }
   })
@@ -53,17 +61,18 @@ test('connect 200 concurrent clients', function (t) {
 test('do not block after a subscription', function (t) {
   t.plan(3)
 
+  const evt = new EventEmitter()
   const broker = aedes()
   const server = net.createServer(broker.handle)
   const total = 10000
-  var sent = 0
-  var received = 0
+  let sent = 0
+  let received = 0
 
   server.listen(0, function (err) {
     t.error(err, 'no error')
 
     const clock = Faketimers.createClock()
-    t.tearDown(clock.reset.bind(clock))
+    t.teardown(clock.reset.bind(clock))
 
     const clockId = clock.setTimeout(finish, total)
 
@@ -77,7 +86,7 @@ test('do not block after a subscription', function (t) {
       t.fail(err)
     })
 
-    var subscriber
+    let subscriber
 
     function immediatePublish () {
       setImmediate(publish)
@@ -97,10 +106,8 @@ test('do not block after a subscription', function (t) {
         port: port,
         keepalive: 0
       }).on('error', function (err) {
-        if (err.code !== 'ECONNRESET') {
-          clock.clearTimeout(clockId)
-          t.fail(err)
-        }
+        clock.clearTimeout(clockId)
+        t.fail(err)
       })
 
       subscriber.subscribe('test', publish)
@@ -112,17 +119,25 @@ test('do not block after a subscription', function (t) {
         received++
         clock.tick(1)
       })
+      subscriber.on('close', function () {
+        evt.emit('finish')
+      })
     }
 
     publisher.on('connect', startSubscriber)
-
-    function finish () {
-      subscriber.end()
-      publisher.end()
+    publisher.on('close', function () {
+      evt.emit('finish')
+    })
+    evt.on('finish', function () {
+      if (publisher.connected || subscriber.connected) { return }
       broker.close()
       server.close()
       t.equal(total, sent, 'messages sent')
       t.equal(total, received, 'messages received')
+    })
+    function finish () {
+      subscriber.end()
+      publisher.end()
     }
   })
 })
@@ -130,17 +145,18 @@ test('do not block after a subscription', function (t) {
 test('do not block with overlapping subscription', function (t) {
   t.plan(3)
 
+  const evt = new EventEmitter()
   const broker = aedes({ concurrency: 15 })
   const server = net.createServer(broker.handle)
   const total = 10000
-  var sent = 0
-  var received = 0
+  let sent = 0
+  let received = 0
 
   server.listen(0, function (err) {
     t.error(err, 'no error')
 
     const clock = Faketimers.createClock()
-    t.tearDown(clock.reset.bind(clock))
+    t.teardown(clock.reset.bind(clock))
 
     const clockId = clock.setTimeout(finish, total)
 
@@ -154,7 +170,7 @@ test('do not block with overlapping subscription', function (t) {
       t.fail(err)
     })
 
-    var subscriber
+    let subscriber
 
     function immediatePublish (e) {
       setImmediate(publish)
@@ -174,10 +190,8 @@ test('do not block with overlapping subscription', function (t) {
         port: port,
         keepalive: 0
       }).on('error', function (err) {
-        if (err.code !== 'ECONNRESET') {
-          clock.clearTimeout(clockId)
-          t.fail(err)
-        }
+        clock.clearTimeout(clockId)
+        t.fail(err)
       })
 
       subscriber.subscribe('#', function () {
@@ -193,17 +207,25 @@ test('do not block with overlapping subscription', function (t) {
         received++
         clock.tick(1)
       })
+      subscriber.on('close', function () {
+        evt.emit('finish')
+      })
     }
 
     publisher.on('connect', startSubscriber)
-
-    function finish () {
-      subscriber.end()
-      publisher.end()
+    publisher.on('close', function () {
+      evt.emit('finish')
+    })
+    evt.on('finish', function () {
+      if (publisher.connected || subscriber.connected) { return }
       broker.close()
       server.close()
       t.equal(total, sent, 'messages sent')
       t.equal(total, received, 'messages received')
+    })
+    function finish () {
+      subscriber.end()
+      publisher.end()
     }
   })
 })
