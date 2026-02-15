@@ -2,7 +2,9 @@
 # Aedes
 
 - [Aedes](#aedes)
-  - [new Aedes([options]) / new Aedes.Server([options])](#new-aedesoptions--new-aedesserveroptions)
+  - [new Aedes(\[options\])](#new-aedesoptions)
+  - [Aedes.createBroker(\[options\])](#aedescreatebrokeroptions)
+  - [aedes.listen()](#aedeslisten)
   - [aedes.id](#aedesid)
   - [aedes.connectedClients](#aedesconnectedclients)
   - [aedes.closed](#aedesclosed)
@@ -23,7 +25,7 @@
   - [aedes.subscribe (topic, deliverfunc, callback)](#aedessubscribe-topic-deliverfunc-callback)
   - [aedes.unsubscribe (topic, deliverfunc, callback)](#aedesunsubscribe-topic-deliverfunc-callback)
   - [aedes.publish (packet, callback)](#aedespublish-packet-callback)
-  - [aedes.close ([callback])](#aedesclose-callback)
+  - [aedes.close (\[callback\])](#aedesclose-callback)
   - [Handler: preConnect (client, packet, callback)](#handler-preconnect-client-packet-callback)
   - [Handler: authenticate (client, username, password, callback)](#handler-authenticate-client-username-password-callback)
   - [Handler: authorizePublish (client, packet, callback)](#handler-authorizepublish-client-packet-callback)
@@ -31,22 +33,75 @@
   - [Handler: authorizeForward (client, packet)](#handler-authorizeforward-client-packet)
   - [Handler: published (packet, client, callback)](#handler-published-packet-client-callback)
 
-## new Aedes([options]) / new Aedes.Server([options])
+## new Aedes([options])
 
 - options `<object>`
   - `mq` [`<MQEmitter>`](../README.md#mqemitter) middleware used to deliver messages to subscribed clients. In a cluster environment it is used also to share messages between brokers instances. __Default__: `mqemitter`
-  - `concurrency` `<number>` maximum number of concurrent messages delivered by `mq`. __Default__: `100`
+  - `concurrency` `<number>` maximum number of concurrent messages that can be processed simultaneously by `mq`. __Default__: `100`
+
+    __Note:__ Concurrency determines how many messages can be "in-flight" at once. When a slow client blocks (socket buffer full), the message delivery hangs waiting for the `drain` event. With `N` concurrency slots and ANY frozen subscriber on a topic, fast clients will receive at most `N` messages before complete deadlock. Higher concurrency = larger buffer before freeze, but without `drainTimeout`, deadlock is __inevitable__. Use `drainTimeout` to protect against this.
   - `persistence` [`<Persistence>`](../README.md#persistence) middleware that stores _QoS > 0, retained, will_ packets and _subscriptions_. __Default__: `aedes-persistence` (_in memory_)
+  Versions 1.x and above require persistence to support async access,see [MIGRATION.md][MIGRATION] for details.
   - `queueLimit` `<number>` maximum number of queued messages before client session is established. If number of queued items exceeds, `connectionError` throws an error `Client queue limit reached`. __Default__: `42`
   - `maxClientsIdLength` option to override MQTT 3.1.0 clients Id length limit. __Default__: `23`
   - `heartbeatInterval` `<number>` an interval in millisconds at which server beats its health signal in `$SYS/<aedes.id>/heartbeat` topic. __Default__: `60000`
   - `id` `<string>` aedes broker unique identifier. __Default__: `uuidv4()`
   - `connectTimeout` `<number>` maximum waiting time in milliseconds waiting for a [`CONNECT`][CONNECT] packet. __Default__: `30000`
+  - `keepaliveLimit` `<number>` maximum client keep alive time allowed, 0 means no limit. __Default__: `0`
+  - `drainTimeout` `<number>` maximum time in milliseconds to wait for a slow client's socket to drain before disconnecting it. When a client's socket buffer fills up (e.g., slow network, unresponsive client), the broker waits for the `drain` event. Without a timeout, one slow client can block message delivery to all other clients. Set to `0` to disable and wait indefinitely (not recommended). __Default__: `60000` (60 seconds)
+
+    __Why use drainTimeout?__ When publishing messages, if a client's TCP buffer is full, `socket.write()` returns `false` and the broker waits for the `drain` event before continuing. If the client stops reading (slow 3G, crashed app, malicious client), `drain` never fires and that message hangs forever. Even with high `concurrency`, a single frozen subscriber will eventually exhaust all slots and cause __complete deadlock__ - no more messages can be delivered to ANY client. This is a DoS vulnerability.
+
+    __Recommended settings:__
+    - Production: `10000` - `60000` ms (10-60 seconds)
+    - High-latency networks: Higher values to avoid disconnecting legitimate slow clients
+    - IoT/embedded devices: Consider client capabilities when setting timeout
+
+    ```js
+    // Recommended for production
+    const broker = await Aedes.createBroker({
+      drainTimeout: 30000  // Disconnect unresponsive clients after 30 seconds (default: 60000)
+      // drainTimeout: 0   // Disable timeout - NOT RECOMMENDED: vulnerable to DoS
+    })
+
+    // Monitor disconnections (optional)
+    broker.on('clientDisconnect', (client) => {
+      console.log(`Client ${client.id} disconnected`)
+    })
+    ```
+
 - Returns `<Aedes>`
 
-Create a new Aedes server.
+Create a new Aedes server instance.
 
-Aedes is the class and function exposed by this module. It can be created by `Aedes()` or using `new Aedes()`. An variant `aedes.Server` is for TypeScript or ES modules.
+Aedes is the class exported by this module.
+The instance will only start listening after [aedes.listen()](#aedeslisten) is called.
+The recommended way to start an Aedes server is to use [Aedes.createBroker([options])](#aedescreatebrokeroptions) instead.
+
+## Aedes.createBroker([options])
+
+An async static method in the Aedes class which creates the instance and automatically awaits `listen()`.
+
+Using `Aedes.createBroker([options])` is the recommended way to start Aedes, example:
+
+```js
+const aedes = await Aedes.createBroker([options])
+```
+
+It uses the same options as [new Aedes([options])](#new-aedesoptions)
+
+## aedes.listen()
+
+Async method to make the aedes instance start listening.
+Example:
+
+```js
+const aedes = new Aedes([options])
+await aedes.listen()
+```
+
+You should typically not need to use this as it is more compact to use
+[Aedes.createBroker([options])](#aedescreatebrokeroptions) instead.
 
 ## aedes.id
 
@@ -113,7 +168,7 @@ Emitted when timeout happes in the `client` keepalive.
 - `packet` `<aedes-packet>` & [`PUBLISH`][PUBLISH]
 - `client` [`<Client>`](./Client.md) | `null`
 
-Emitted when servers delivers the `packet` to subscribed `client`. If there are no clients subscribed to the `packet` topic, server still publish the `packet` and emit thie event. `client` is `null` when `packet` is an internal message like aedes heartbeat message and LWT.
+Emitted when servers delivers the `packet` to subscribed `client`. If there are no clients subscribed to the `packet` topic, server still publish the `packet` and emit the event. `client` is `null` when `packet` is an internal message like aedes heartbeat message and LWT.
 
 > _Note! `packet` belongs `aedes-packet` type. Some properties belongs to aedes internal, any changes on them will break aedes internal flow._
 
@@ -172,8 +227,11 @@ Emitted when server is closed.
 A connection listener that pipe stream to aedes.
 
 ```js
-const aedes = require('./aedes')()
-const server = require('net').createServer(aedes.handle)
+import { createServer } from 'node:net'
+import { Aedes } from 'aedes'
+
+const aedes = await Aedes.createBroker()
+const server = createServer(aedes.handle)
 ```
 
 ## aedes.subscribe (topic, deliverfunc, callback)
@@ -186,7 +244,7 @@ const server = require('net').createServer(aedes.handle)
 
 Directly subscribe a `topic` in server side. Bypass [`authorizeSubscribe`](#handler-authorizesubscribe-client-subscription-callback)
 
-The `topic` and `deliverfunc` is a compound key to differentiate the uniqueness of its subscription pool. `topic` could be the one that is existed, in this case `deliverfunc` will be invoked as well as `SUBSCRIBE` does.
+The `topic` and `deliverfunc` is a compound key to differentiate the uniqueness of its subscription pool. `topic` could be the one that is existed, in this case `deliverfunc` will be invoked as well as [`SUBSCRIBE`][SUBSCRIBE] does.
 
 `deliverfunc` supports backpressue.
 
@@ -291,7 +349,7 @@ Please refer to [Connect Return Code](http://docs.oasis-open.org/mqtt/mqtt/v3.1.
 
 ## Handler: authorizePublish (client, packet, callback)
 
-- client: [`<Client>`](./Client.md)
+- client: [`<Client>`](./Client.md) | `null`
 - packet: `<object>` [`PUBLISH`][PUBLISH]
 - callback: `<Function>` `(error) => void`
   - error `<Error>` | `null`
@@ -300,6 +358,8 @@ Invoked when
 
 1. publish LWT to all online clients
 2. incoming client publish
+
+`client` is `null` when aedes publishes obsolete LWT without connected clients
 
 If invoked `callback` with no errors, server authorizes the packet otherwise emits `clientError` with `error`. If an `error` occurs the client connection will be closed, but no error is returned to the client (MQTT-3.3.5-2)
 
@@ -310,6 +370,17 @@ aedes.authorizePublish = function (client, packet, callback) {
   }
   if (packet.topic === 'bbb') {
     packet.payload = Buffer.from('overwrite packet payload')
+  }
+  callback(null)
+}
+```
+
+By default `authorizePublish` throws error in case a client publish to topics with `$SYS/` prefix to prevent possible DoS (see [#597](https://github.com/moscajs/aedes/issues/597)). If you write your own implementation of `authorizePublish` we suggest you to add a check for this. Default implementation:
+
+```js
+function defaultAuthorizePublish (client, packet, callback) {
+  if (packet.topic.startsWith($SYS_PREFIX)) {
+    return callback(new Error($SYS_PREFIX + ' topic is reserved'))
   }
   callback(null)
 }
@@ -326,7 +397,7 @@ aedes.authorizePublish = function (client, packet, callback) {
 Invoked when
 
 1. restore subscriptions in non-clean session.
-2. incoming client `SUBSCRIBE`
+2. incoming client [`SUBSCRIBE`][SUBSCRIBE]
 
 `subscription` is a dictionary object like `{ topic: hello, qos: 0 }`.
 
@@ -392,7 +463,7 @@ aedes.authorizeForward = function (client, packet) {
 - client: [`<Client>`](./Client.md)
 - callback: `<Function>`
 
-same as [`Event: publish`](#event-publish), but provides a backpressure functionality.
+same as [`Event: publish`](#event-publish), but provides a backpressure functionality. TLDR; If you are doing operations on packets that MUST require finishing operations on a packet before handling the next one use this otherwise, expecially for long running operations, you should use [`Event: publish`](#event-publish) instead.
 
 [CONNECT]: https://github.com/mqttjs/mqtt-packet#connect
 [CONNACK]: https://github.com/mqttjs/mqtt-packet#connack
@@ -400,3 +471,4 @@ same as [`Event: publish`](#event-publish), but provides a backpressure function
 [PINGREQ]: https://github.com/mqttjs/mqtt-packet#pingreq
 [PUBLISH]: https://github.com/mqttjs/mqtt-packet#publish
 [PUBREL]: https://github.com/mqttjs/mqtt-packet#pubrel
+[MIGRATION]: MIGRATION.md
