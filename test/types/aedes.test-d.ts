@@ -7,7 +7,7 @@ import type {
   Connection
 } from '../../aedes.js'
 import { Aedes } from '../../aedes.js'
-import type { AedesPublishPacket, ConnackPacket, ConnectPacket, PingreqPacket, PublishPacket, PubrelPacket, Subscription, SubscribePacket, UnsubscribePacket } from '../../types/packet'
+import type { AedesPublishPacket, ConnackPacket, ConnectPacket, PingreqPacket, PublishPacket, PubrelPacket, Subscription, SubscribePacket, UnsubscribePacket } from '../../types/packet.js'
 import { expectType } from 'tsd'
 
 // Aedes server
@@ -20,6 +20,9 @@ const broker = new Aedes({
   connectTimeout: 30000,
   maxClientsIdLength: 23,
   keepaliveLimit: 0,
+  trustProxy: true,
+  trustedProxies: ['127.0.0.1'],
+  decodeProtocol: (client: Client, buffer: Buffer) => buffer,
   preConnect: (client: Client, packet: ConnectPacket, callback) => {
     if (client.req) {
       callback(new Error('not websocket stream'), false)

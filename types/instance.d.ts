@@ -1,7 +1,7 @@
 import { Duplex } from 'node:stream'
 import { Socket } from 'node:net'
 import { IncomingMessage } from 'node:http'
-import { Client } from './client'
+import { Client } from './client.js'
 import type {
   AedesPublishPacket,
   ConnectPacket,
@@ -10,7 +10,7 @@ import type {
   PingreqPacket,
   PublishPacket,
   PubrelPacket
-} from './packet'
+} from './packet.js'
 import { EventEmitter } from 'node:events'
 
 type LastHearthbeatTimestamp = Date
@@ -68,6 +68,11 @@ type PublishedHandler = (
   callback: (error?: Error | null) => void
 ) => void
 
+type DecodeProtocolHandler = (
+  client: Client,
+  buffer: Buffer
+) => any
+
 export interface AedesOptions {
   mq?: any;
   id?: string;
@@ -79,6 +84,10 @@ export interface AedesOptions {
   keepaliveLimit?: number;
   queueLimit?: number;
   maxClientsIdLength?: number;
+  maxTopicLevels?: number; // default: 100, clamped to [1, 100]
+  decodeProtocol?: DecodeProtocolHandler;
+  trustProxy?: boolean;
+  trustedProxies?: string[];
   preConnect?: PreConnectHandler;
   authenticate?: AuthenticateHandler;
   authorizePublish?: AuthorizePublishHandler;

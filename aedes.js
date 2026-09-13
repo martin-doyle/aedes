@@ -1,14 +1,11 @@
 import EventEmitter from 'node:events'
-import parallel from 'fastparallel'
-import series from 'fastseries'
-import { v4 as uuidv4 } from 'uuid'
-import reusify from 'reusify'
-import { pipeline } from 'stream'
+import { randomUUID } from 'node:crypto'
+import { promisify } from 'node:util'
 import Packet from 'aedes-packet'
 import memory from 'aedes-persistence'
 import mqemitter from 'mqemitter'
 import Client from './lib/client.js'
-import { $SYS_PREFIX, bulk } from './lib/utils.js'
+import { $SYS_PREFIX, batch, noop, runSeries, topicLevelCount } from './lib/utils.js'
 import pkg from './package.json' with { type: 'json' }
 
 const defaultOptions = {
@@ -27,9 +24,16 @@ const defaultOptions = {
   trustedProxies: [],
   queueLimit: 42,
   maxClientsIdLength: 23,
+  maxTopicLevels: 100,
   keepaliveLimit: 0
 }
 const version = pkg.version
+
+// Hard ceiling for maxTopicLevels: the bundled mqemitter and aedes-persistence
+// build qlobber with its default max_words of 100 and aedes cannot raise it, so
+// a larger value would pass our guard yet still throw `too many words` in the
+// matcher. Clamp to [1, MAX_TOPIC_LEVELS] to keep the option safe.
+const MAX_TOPIC_LEVELS = 100
 
 export class Aedes extends EventEmitter {
   constructor (opts) {
@@ -38,7 +42,7 @@ export class Aedes extends EventEmitter {
 
     opts = Object.assign({}, defaultOptions, opts)
     this.opts = opts
-    this.id = opts.id || uuidv4()
+    this.id = opts.id || randomUUID()
     // +1 when construct a new aedes-packet
     // internal track for last brokerCounter
     this.counter = 0
@@ -46,6 +50,8 @@ export class Aedes extends EventEmitter {
     this.connectTimeout = opts.connectTimeout
     this.keepaliveLimit = opts.keepaliveLimit
     this.maxClientsIdLength = opts.maxClientsIdLength
+    // clamp to a safe [1, 100] range; see MAX_TOPIC_LEVELS
+    this.maxTopicLevels = Math.min(Math.max(opts.maxTopicLevels, 1), MAX_TOPIC_LEVELS)
     this.mq = opts.mq || mqemitter({
       concurrency: opts.concurrency,
       matchEmptyLevels: true // [MQTT-4.7.1-3]
@@ -56,10 +62,6 @@ export class Aedes extends EventEmitter {
       // return, just to please standard
       return new Client(that, conn, req)
     }
-
-    this._parallel = parallel()
-    this._series = series()
-    this._enqueuers = reusify(DoEnqueues)
 
     this.preConnect = opts.preConnect
     this.authenticate = opts.authenticate
@@ -112,51 +114,45 @@ export class Aedes extends EventEmitter {
       }, noop)
     }
 
-    function deleteOldBrokers (broker) {
-      if (that.brokers[broker] + (3 * opts.heartbeatInterval) < Date.now()) {
-        delete that.brokers[broker]
+    async function _clearWills () {
+      const pAuthorizePublish = promisify(that.authorizePublish).bind(that)
+      const pPublish = promisify(that.publish).bind(that)
+      const batchSize = 16 // default highWatermark for Writable in ObjectMode
+
+      async function checkAndPublish (will) {
+        const notPublish = that.brokers[will.brokerId] !== undefined && that.brokers[will.brokerId] + (3 * opts.heartbeatInterval) >= Date.now()
+        if (notPublish) {
+          return
+        }
+        // randomize this, so that multiple brokers
+        // do not publish the same wills at the same time
+        const client = that.clients[will.clientId] || null
+        await pAuthorizePublish(client, will)
+        await pPublish(will)
+        await that.persistence.delWill({
+          id: will.clientId,
+          brokerId: will.brokerId
+        })
+      }
+
+      // delete old brokers
+      for (const broker in that.brokers) {
+        if (that.brokers[broker] + (3 * opts.heartbeatInterval) < Date.now()) {
+          delete that.brokers[broker]
+        }
+      }
+
+      const wills = that.persistence.streamWill(that.brokers)
+      for await (const promises of batch(wills, checkAndPublish, batchSize)) {
+        await Promise.all(promises)
       }
     }
 
-    this._clearWillInterval = setInterval(function () {
-      Object.keys(that.brokers).forEach(deleteOldBrokers)
-
-      pipeline(
-        that.persistence.streamWill(that.brokers),
-        bulk(receiveWills),
-        function done (err) {
-          if (err) {
-            that.emit('error', err)
-          }
-        }
-      )
-    }, opts.heartbeatInterval * 4)
-
-    function receiveWills (chunks, done) {
-      that._parallel(that, checkAndPublish, chunks, done)
-    }
-
-    function checkAndPublish (will, done) {
-      const notPublish = that.brokers[will.brokerId] !== undefined && that.brokers[will.brokerId] + (3 * opts.heartbeatInterval) >= Date.now()
-
-      if (notPublish) return done()
-
-      // randomize this, so that multiple brokers
-      // do not publish the same wills at the same time
-      this.authorizePublish(that.clients[will.clientId] || null, will, function (err) {
-        if (err) { return doneWill() }
-        that.publish(will, doneWill)
-
-        function doneWill (err) {
-          if (err) { return done(err) }
-          that.persistence.delWill({
-            id: will.clientId,
-            brokerId: will.brokerId
-          }).then(will => done(undefined, will), done)
-        }
+    this._clearWillInterval = setInterval(() => {
+      _clearWills().catch(err => {
+        that.emit('error', err)
       })
-    }
-
+    }, opts.heartbeatInterval * 4)
     this.mq.on($SYS_PREFIX + '+/heartbeat', function storeBroker (packet, done) {
       that.brokers[packet.payload.toString()] = Date.now()
       done()
@@ -208,17 +204,32 @@ export class Aedes extends EventEmitter {
       done = client
       client = null
     }
+    // reject deeply nested topics before they reach qlobber (via mqemitter and
+    // the persistence trie), whose synchronous `too many words` throw would
+    // otherwise crash the broker. The protocol handlers validate the wire paths
+    // earlier; this also covers the will publish and direct programmatic use.
+    // See lib/utils.js#topicLevelCount.
+    if (topicLevelCount(packet.topic) > this.maxTopicLevels) {
+      return (done || noop)(new Error('topic has too many levels'))
+    }
     const p = new Packet(packet, this)
     const publishFuncs = p.qos > 0 ? publishFuncsQoS : publishFuncsSimple
 
-    this._series(new PublishState(this, client, packet), publishFuncs, p, done)
+    runSeries(new PublishState(this, client, packet), publishFuncs, p, done)
   }
 
   subscribe (topic, func, done) {
+    // see publish(): guard against qlobber's synchronous `too many words` throw
+    if (topicLevelCount(topic) > this.maxTopicLevels) {
+      return (done || noop)(new Error('topic has too many levels'))
+    }
     this.mq.on(topic, func, done)
   }
 
   unsubscribe (topic, func, done) {
+    if (topicLevelCount(topic) > this.maxTopicLevels) {
+      return (done || noop)(new Error('topic has too many levels'))
+    }
     this.mq.removeListener(topic, func, done)
   }
 
@@ -266,11 +277,14 @@ export class Aedes extends EventEmitter {
     this.closed = true
     clearInterval(this._heartbeatInterval)
     clearInterval(this._clearWillInterval)
-    this._parallel(this, closeClient, Object.keys(this.clients), doneClose)
-    function doneClose () {
+    const promises = []
+    for (const clientId of Object.keys(this.clients)) {
+      promises.push(closeClient(this.clients[clientId]))
+    }
+    Promise.all(promises).finally(() => {
       that.emit('closed')
       that.mq.close(cb)
-    }
+    })
   }
 }
 
@@ -289,7 +303,7 @@ function emitPacket (packet, done) {
 }
 
 function enqueueOffline (packet, done) {
-  const enqueuer = this.broker._enqueuers.get()
+  const enqueuer = new DoEnqueues()
 
   enqueuer.complete = done
   enqueuer.packet = packet
@@ -333,7 +347,6 @@ class DoEnqueues {
 
       broker.persistence.outgoingEnqueueCombi(subs, packet)
         .then(() => complete(null), complete)
-      broker._enqueuers.release(that)
     }
   }
 }
@@ -362,8 +375,10 @@ const publishFuncsQoS = [
   callPublished
 ]
 
-function closeClient (client, cb) {
-  this.clients[client].close(cb)
+async function closeClient (clientInstance) {
+  return new Promise((resolve) => {
+    clientInstance.close(resolve)
+  })
 }
 
 function defaultPreConnect (client, packet, callback) {
@@ -401,11 +416,9 @@ class PublishState {
   }
 }
 
-function noop () {}
-
 function warnMigrate () {
   throw new Error(
-` Aedes default export has been removed.
+    ` Aedes default export has been removed.
  Use 'const aedes = await Aedes.createBroker()' instead.
  See: https://github.com/moscajs/aedes/docs/MIGRATION.MD
  `)
