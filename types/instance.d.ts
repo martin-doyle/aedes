@@ -13,7 +13,7 @@ import type {
 } from './packet.js'
 import { EventEmitter } from 'node:events'
 
-type LastHearthbeatTimestamp = Date
+type LastHearthbeatTimestamp = number
 
 export interface Brokers {
   [brokerId: string]: LastHearthbeatTimestamp;
@@ -83,6 +83,7 @@ export interface AedesOptions {
   drainTimeout?: number; // default: 60000 (60 seconds)
   keepaliveLimit?: number;
   queueLimit?: number;
+  maxInflightInbound?: number; // broker-side cap on inbound in-flight QoS 2 per client; 0 = unlimited (default: 1000)
   maxClientsIdLength?: number;
   maxTopicLevels?: number; // default: 100, clamped to [1, 100]
   decodeProtocol?: DecodeProtocolHandler;
